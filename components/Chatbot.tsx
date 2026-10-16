@@ -5,7 +5,7 @@ import ViewHeader from './common/ViewHeader';
 import { ChatBottleIcon } from './icons/FeatureIcons';
 import { useTranslation } from '../hooks/useTranslation';
 import { useChat, Message } from '../hooks/useChat';
-import { MicrophoneIcon, SendIcon } from './icons/VoiceIcons';
+import { MicrophoneIcon, SendIcon, SpeakerOnIcon, SpeakerOffIcon } from './icons/VoiceIcons';
 import { YouTubeVideo } from '../types';
 
 const getSuggestionPrompts = (t: (key: string) => string) => [
@@ -44,6 +44,11 @@ const Chatbot: React.FC<ChatbotProps> = ({ onBack }) => {
     setInput, 
     isLoading, 
     isListening, 
+    isSpeaking,
+    isMuted,
+    toggleMute,
+    speakMessage,
+    stopSpeaking,
     sendMessage, 
     toggleListening 
   } = useChat(greetingMessage);
@@ -95,9 +100,22 @@ const Chatbot: React.FC<ChatbotProps> = ({ onBack }) => {
     };
 
     return (
-        <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} chat-bubble`}>
-            <div className={`max-w-xs md:max-w-md lg:max-w-lg px-4 py-2 rounded-2xl ${isUser ? 'bg-brand-green text-white rounded-br-lg' : 'bg-gray-200 text-brand-text rounded-bl-lg'}`}>
+        <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} chat-bubble group`}>
+            <div className={`max-w-xs md:max-w-md lg:max-w-lg px-4 py-2 rounded-2xl relative ${isUser ? 'bg-brand-green text-white rounded-br-lg' : 'bg-gray-200 text-brand-text rounded-bl-lg'}`}>
                 <p className="text-sm break-words" dangerouslySetInnerHTML={{ __html: isUser ? message.text.replace(/\n/g, '<br />') : processBotText(message.text) }} />
+                {!isUser && (
+                    <div className="flex justify-end mt-1">
+                        <button
+                            type="button"
+                            onClick={() => speakMessage(message.text)}
+                            className="text-gray-400 hover:text-brand-green p-1 transition-colors rounded text-xs flex items-center space-x-1"
+                            title="Listen to this message"
+                            aria-label="Listen to message"
+                        >
+                            <SpeakerOnIcon className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -124,6 +142,17 @@ const Chatbot: React.FC<ChatbotProps> = ({ onBack }) => {
             <div className="z-10">
                 <h3 className="font-bold text-lg">AI Sustainability Assistant</h3>
                 <p className="text-xs opacity-90">Powered by Gemini</p>
+            </div>
+            <div className="z-10">
+                <button
+                    type="button"
+                    onClick={toggleMute}
+                    title={isMuted ? "Unmute Voice" : (isSpeaking ? "Mute Voice (Speaking)" : "Mute Voice")}
+                    className={`p-2 rounded-full transition-colors ${isSpeaking ? 'bg-white/30 animate-pulse text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}
+                    aria-label={isMuted ? "Unmute voice audio" : "Mute voice audio"}
+                >
+                    {isMuted ? <SpeakerOffIcon className="w-5 h-5" /> : <SpeakerOnIcon className="w-5 h-5" />}
+                </button>
             </div>
         </div>
         <div className="flex-grow p-4 space-y-4 overflow-y-auto">

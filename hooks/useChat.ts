@@ -125,8 +125,11 @@ export const useChat = (greetingMessage: string) => {
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const [isMuted, setIsMuted] = useState(false);
     const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
+    const hasUserInteracted = useRef(false);
     const chatRef = useRef<Chat | null>(null);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
 
@@ -141,10 +144,11 @@ export const useChat = (greetingMessage: string) => {
         };
         
         window.speechSynthesis.addEventListener('voiceschanged', getAndSetVoices);
-        getAndSetVoices(); // Initial check
+        getAndSetVoices();
 
         return () => {
             window.speechSynthesis.removeEventListener('voiceschanged', getAndSetVoices);
+            window.speechSynthesis.cancel();
         };
     }, []);
 
@@ -157,36 +161,123 @@ export const useChat = (greetingMessage: string) => {
         return langMap[code] || 'English';
     }, []);
 
+    const cleanTextForSpeech = (rawText: string): string => {
+        return rawText
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+            .replace(/https?:\/\/\S+/g, '')
+            .replace(/[*_#`~>]/g, '')
+            .replace(/\{[^}]+\}/g, '')
+            .replace(/PLASTIVIZE_YOUTUBE_LIST\[.*\]/g, 'Here are a few videos I found for you.')
+            .replace(/\n+/g, '. ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
+
+    const getBestNaturalVoice = useCallback((
+        allVoices: SpeechSynthesisVoice[],
+        lang: LanguageCode,
+        bcp47: string
+    ): SpeechSynthesisVoice | null => {
+        if (!allVoices || allVoices.length === 0) return null;
+
+        const exactMatches = allVoices.filter(v => v.lang.toLowerCase() === bcp47.toLowerCase());
+        const langPrefixMatches = allVoices.filter(v => v.lang.toLowerCase().startsWith(lang.toLowerCase()));
+        const candidates = exactMatches.length > 0 ? exactMatches : (langPrefixMatches.length > 0 ? langPrefixMatches : allVoices);
+
+        const naturalKeywords = [
+            'natural', 'neural', 'google', 'premium', 'enhanced', 'samantha', 'jenny', 'guy',
+            'aria', 'sonia', 'serena', 'oliver', 'george', 'online', 'zira'
+        ];
+        const roboticKeywords = ['espeak', 'whisper', 'croak', 'klatt', 'synth'];
+
+        let bestVoice: SpeechSynthesisVoice | null = null;
+        let highestScore = -100;
+
+        for (const voice of candidates) {
+            let score = 0;
+            const nameLower = voice.name.toLowerCase();
+
+            if (voice.lang.toLowerCase() === bcp47.toLowerCase()) score += 20;
+            else if (voice.lang.toLowerCase().startsWith(lang.toLowerCase())) score += 10;
+
+            if (!voice.localService) score += 15;
+
+            for (const kw of naturalKeywords) {
+                if (nameLower.includes(kw)) {
+                    score += 12;
+                    break;
+                }
+            }
+
+            for (const rk of roboticKeywords) {
+                if (nameLower.includes(rk)) {
+                    score -= 30;
+                    break;
+                }
+            }
+
+            if (score > highestScore) {
+                highestScore = score;
+                bestVoice = voice;
+            }
+        }
+
+        return bestVoice || candidates[0] || null;
+    }, []);
+
+    const stopSpeaking = useCallback(() => {
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+        }
+        setIsSpeaking(false);
+    }, []);
+
     const speak = useCallback((text: string, lang: LanguageCode) => {
-        if (!('speechSynthesis' in window)) {
-            console.warn('Speech Synthesis not supported');
+        if (!('speechSynthesis' in window) || isMuted) {
             return;
         }
-        
-        window.speechSynthesis.cancel(); // Stop any currently playing speech
-        const utterance = new SpeechSynthesisUtterance(text);
+
+        const cleaned = cleanTextForSpeech(text);
+        if (!cleaned) return;
+
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(cleaned);
         const bcp47Lang = langToBcp47[lang];
         utterance.lang = bcp47Lang;
 
-        if (voices.length > 0) {
-            // Find an exact match first (e.g., 'te-IN'), then a partial match (e.g., 'te').
-            let voice = voices.find(v => v.lang === bcp47Lang);
-            if (!voice) {
-                voice = voices.find(v => v.lang.startsWith(lang));
-            }
+        const currentVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+        const bestVoice = getBestNaturalVoice(currentVoices, lang, bcp47Lang);
 
-            if (voice) {
-                utterance.voice = voice;
-            } else {
-                console.warn(`No voice found for language: ${lang} (${bcp47Lang}). The browser will use its default.`);
-            }
-        } else {
-            console.warn('Voices not loaded yet, the browser will use its default for the specified language.');
+        if (bestVoice) {
+            utterance.voice = bestVoice;
         }
-        
-        window.speechSynthesis.speak(utterance);
-    }, [voices]);
 
+        utterance.rate = 0.96;
+        utterance.pitch = 1.02;
+        utterance.volume = 1.0;
+
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+
+        window.speechSynthesis.speak(utterance);
+    }, [voices, isMuted, getBestNaturalVoice]);
+
+    const speakMessage = useCallback((text: string) => {
+        hasUserInteracted.current = true;
+        speak(text, language);
+    }, [speak, language]);
+
+    const toggleMute = useCallback(() => {
+        setIsMuted(prev => {
+            const next = !prev;
+            if (next) {
+                stopSpeaking();
+            }
+            return next;
+        });
+    }, [stopSpeaking]);
 
     useEffect(() => {
         try {
@@ -194,7 +285,7 @@ export const useChat = (greetingMessage: string) => {
             const languageName = getLanguageName(language);
             const ai = new GoogleGenAI({ apiKey: key || 'dummy-key' });
             chatRef.current = ai.chats.create({
-                model: 'gemini-2.5-flash',
+                model: 'gemini-3.8-flash',
                 config: {
                     systemInstruction: `You are a friendly and helpful assistant for PLASTIVIZE, an app focused on plastic recycling and sustainability. Provide factual, neutral, and encouraging information. Keep your answers concise (2-3 sentences max) and easy to understand. You can navigate the user around the app, fetch recycling information, and find YouTube DIY videos by calling functions. When a function call is needed, provide ONLY the function call. The system will execute it and return the result to you. Your subsequent response to the user should be a simple confirmation of the action taken (e.g., "Done! I've taken you to the dashboard.") or present the information found. When you receive a list of videos from the 'searchYouTube' function, YOU MUST respond with a single line of text in this exact format: PLASTIVIZE_YOUTUBE_LIST[...json_array...]. The JSON array must contain objects with these exact keys: "videoId", "title", and "thumbnailUrl". Do not add any other text or formatting. You must respond in ${languageName}.`,
                     tools,
@@ -208,16 +299,20 @@ export const useChat = (greetingMessage: string) => {
     }, [language, getLanguageName, greetingMessage]);
 
     useEffect(() => {
+        // Only auto-speak if user has actively interacted (do not auto-speak greeting on initial load)
+        if (!hasUserInteracted.current || isMuted) {
+            return;
+        }
+
         const lastMessage = messages[messages.length - 1];
         if (lastMessage && lastMessage.sender === 'bot') {
-            // Do not speak if it's a structured message
             if (lastMessage.text.startsWith('PLASTIVIZE_YOUTUBE_LIST[')) {
                 speak('Here are a few videos I found for you.', language);
             } else {
                 speak(lastMessage.text, language);
             }
         }
-    }, [messages, language, speak]);
+    }, [messages, language, speak, isMuted]);
 
     const handleFunctionCall = useCallback(async (functionCalls: any[]) => {
         let functionResponseParts: Part[] = [];
@@ -252,6 +347,7 @@ export const useChat = (greetingMessage: string) => {
     const sendMessage = useCallback(async (messageText: string) => {
         if (!messageText.trim()) return;
 
+        hasUserInteracted.current = true;
         setIsLoading(true);
         const userMessage: Message = { sender: 'user', text: messageText };
         setMessages(prev => [...prev, userMessage]);
@@ -264,7 +360,6 @@ export const useChat = (greetingMessage: string) => {
 
             while(response.functionCalls && response.functionCalls.length > 0) {
                 const functionResponseParts = await handleFunctionCall(response.functionCalls);
-                // FIX: The sendMessage method expects a SendMessageParameters object. The function response parts (Part[]) should be passed as the 'message' property.
                 response = await chatRef.current.sendMessage({ message: functionResponseParts });
             }
             
@@ -322,6 +417,11 @@ export const useChat = (greetingMessage: string) => {
         setInput,
         isLoading,
         isListening,
+        isSpeaking,
+        isMuted,
+        toggleMute,
+        speakMessage,
+        stopSpeaking,
         sendMessage,
         toggleListening,
     };
